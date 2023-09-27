@@ -1,0 +1,15 @@
+.chat-box {
+    width: fit-content;
+    max-width: 80%;
+    padding: 10px 30px;
+    border-radius: 20px;
+}
+
+.chat-box--bot {
+    background-color: aliceblue;
+}
+
+.chat-box--user {
+    background-color: bisque;
+    margin-left: auto;
+}
