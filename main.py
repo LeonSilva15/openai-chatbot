@@ -6,141 +6,224 @@ import openai
 from dotenv import load_dotenv
 import os
 
-app = Flask(__name__)
+# Create the flask app
+app = Flask( __name__ )
+
+# Load the environment variables
 load_dotenv()
-openai.api_key = os.getenv('API_KEY')
-app.secret_key = os.getenv('SECRET_KEY')
+openai.api_key = os.getenv( 'API_KEY' )
+app.secret_key = os.getenv( 'SECRET_KEY' )
+app.config[ 'MYSQL_HOST' ] = os.getenv( 'DB_HOST' )
+app.config[ 'MYSQL_USER' ] = os.getenv( 'DB_USER' )
+app.config[ 'MYSQL_PASSWORD' ] = os.getenv( 'DB_PASSWORD' )
+app.config[ 'MYSQL_DB' ] = os.getenv( 'DB_DB' )
 
-app.config['MYSQL_HOST'] = os.getenv('DB_HOST')
-app.config['MYSQL_USER'] = os.getenv('DB_USER')
-app.config['MYSQL_PASSWORD'] = os.getenv('DB_PASSWORD')
-app.config['MYSQL_DB'] = os.getenv('DB_DB')
-
+# Get the database driver
 mysql = MySQL( app )
+cursor = None
 
-conversation = []
+DB_ACTIONS = {
+    'ADD_CHAT': 'ADD_CHAT',
+    'GET_CHAT': 'GET_CHAT',
+    'UPDATE_CHAT': 'UPDATE_CHAT',
+    'ADD_USER': 'ADD_USER',
+    'GET_USER': 'GET_USER'
+}
 
-@app.route('/', methods=['GET', 'POST'])
-def chat():
-    if not session.get('loggedin'):
-        return redirect(url_for('login'))
+# Error handling messages format
+class ErrorMessage:
+    def __init__( self, error, message ):
+        self.error = error
+        self.message = message
+
+# Create the MySQL cursor or get the currently created one
+def getCursor():
+    try:
+        return cursor or mysql.connection.cursor( MySQLdb.cursors.DictCursor )
+    except:
+        return ErrorMessage(
+            'Error in the database!',
+            'Something went wrong when connecting to the database.'
+        )
+
+# Queries runner
+def runQuery( action, params ):
+    cursor = getCursor()
+    
+    if( type( cursor ) is ErrorMessage ):
+        return cursor
 
     try:
-        cursor = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
-    except:
-        return render_template('error.html', error='Error in the database!', message='Something went wrong when trying to connect to the database!')
+        if action == DB_ACTIONS[ 'ADD_CHAT' ]:
+            cursor.execute( "INSERT INTO chats VALUES ({}, '{}', '{}')".format(
+                params[ 'id' ],
+                params[ 'question' ],
+                params[ 'answer' ]
+            ) )
 
-    id = session.get('id')
+            mysql.connection.commit()
+            return
+
+        if action == DB_ACTIONS[ 'GET_CHAT' ]:
+            cursor.execute( 'SELECT * FROM chats WHERE id={}'.format(
+                params[ 'id' ]
+            ) )
+            return cursor.fetchall()
+
+        if action == DB_ACTIONS[ 'ADD_USER' ]:
+            cursor.execute( "INSERT INTO users VALUES (NULL, '{}', '{}' )".format(
+                params[ 'userName' ],
+                params[ 'hashedPwd' ]
+            ) )
+
+            mysql.connection.commit()
+            return
+
+        if action == DB_ACTIONS[ 'GET_USER' ]:
+            cursor.execute( "SELECT * FROM users WHERE name = '{}'".format(
+                params[ 'userName' ]
+            ) )
+
+            return cursor.fetchone()
+
+    except:
+        return ErrorMessage(
+            'Error in the database!',
+            'Something went wrong in the database.'
+        )
+
+# Error rendering method
+def renderError( errorMessage ):
+    return render_template(
+            'error.html',
+            error = errorMessage.error,
+            message = errorMessage.message
+        )
+
+@app.route( '/', methods=[ 'GET', 'POST' ] )
+def chat():
+    if not session.get( 'loggedin' ):
+        return redirect(url_for( 'login' ) )
+
+    id = session.get( 'id' )
 
     if request.method == 'GET':
+        response = runQuery( DB_ACTIONS[ 'GET_CHAT' ], { 'id': id } )
 
-        try:
-            cursor.execute('SELECT * FROM chats WHERE id={}'.format(id))
-        except:
-            return render_template('error.html', error='Error in the database!', message='Something went wrong when trying to connect to the database!')
-
-        chat = cursor.fetchall()
-        return render_template('index.html', chat=chat)
+        if( type( response ) is ErrorMessage ):
+            return renderError( response )
+        
+        chat = response
+        return render_template( 'index.html', chat = chat )
 
     if request.method == 'POST':
+        print( 'POST' )
         data = request.get_json()
         completion = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": data["question"]}
-            ]
+            model='gpt-3.5-turbo',
+            messages=[ {
+                'role': 'user',
+                'content': data[ 'question' ]
+            } ]
         )
-        answer = completion['choices'][0]['message']['content']
+        answer = completion[ 'choices' ][ 0 ][ 'message' ][ 'content' ]
 
-        try:
-            cursor.execute('INSERT INTO chats VALUES ({}, \'{}\', \'{}\')'.format(id, data["question"], answer))
-        except:
-            return render_template('error.html', error='Error in the database!', message='Something went wrong when trying to connect to the database!')
+        response = runQuery( DB_ACTIONS[ 'ADD_CHAT' ], {
+            'id': id,
+            'question': data[ 'question' ],
+            'answer': answer
+        } )
 
-        mysql.connection.commit()
+        if( type( response ) is ErrorMessage ):
+            return renderError( response )
+
         return jsonify( answer )
 
-    # return render_template('index.html')
-
-@app.route('/error', methods=['GET'])
+@app.route( '/error', methods=[ 'GET' ] )
 def error():
-    return render_template('error.html', error='Error!', message='Something went wrong!')
+    return render_template(
+        'error.html',
+        error = 'Error!',
+        message = 'Something went wrong!'
+    )
 
-@app.route('/login', methods=['GET', 'POST'])
+@app.route( '/login', methods=[ 'GET', 'POST' ] )
 def login():
-    try:
-        cursor = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
-    except:
-        return render_template('error.html', error='Error in the database!', message='Something went wrong when trying to connect to the database!')
-
     mesage = ''
     if request.method == 'POST' and 'user' in request.form and 'password' in request.form:
-        userName = request.form['user']
-        password = request.form['password'].encode('utf-8')
+        userName = request.form[ 'user' ]
+        password = request.form[ 'password' ].encode( 'utf-8' )
 
-        try:
-            cursor.execute('SELECT * FROM users WHERE name = \'{}\''.format(userName))
-        except:
-            return render_template('error.html', error='Error in the database!', message='Something went wrong when trying to connect to the database!')
+        response = runQuery( DB_ACTIONS[ 'GET_USER' ], {
+            'userName': userName
+        } )
+        
+        if( type( response ) is ErrorMessage ):
+            return renderError( response )
+        
+        user = response
 
-        user = cursor.fetchone()
-        if user and bcrypt.checkpw(password, user['password'].encode('utf-8')):
-            session['loggedin'] = True
-            session['id'] = user['id']
-            session['user'] = user['name']
+        if user and bcrypt.checkpw(password, user[ 'password' ].encode( 'utf-8' ) ):
+            session[ 'loggedin' ] = True
+            session[ 'id' ] = user[ 'id' ]
+            session[ 'user' ] = user[ 'name' ]
             mesage = 'Successful loggin!'
-            return redirect(url_for('chat'))
+            return redirect(url_for( 'chat' ) )
         else:
             mesage = 'Wrong credentials!'
-    return render_template('login.html', mesage = mesage)
 
-@app.route('/logout', methods=['GET'])
+    return render_template( 'login.html', mesage = mesage )
+
+@app.route( '/logout', methods=[ 'GET' ] )
 def logout():
-    session['loggedin'] = False
-    session['id'] = ''
-    session['user'] = ''
-    return redirect(url_for('login'))
+    session[ 'loggedin' ] = False
+    session[ 'id' ] = ''
+    session[ 'user' ] = ''
+    return redirect(url_for( 'login' ) )
 
-@app.route('/signin', methods=['GET', 'POST'])
+@app.route( '/signin', methods=[ 'GET', 'POST' ] )
 def signin():
-    try:
-        cursor = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
-    except:
-        return render_template('error.html', error='Error in the database!', message='Something went wrong when trying to connect to the database!')
-
     mesage = ''
     if request.method == 'POST' and 'user' in request.form and 'password' in request.form:
-        user = request.form['user']
-        password = request.form['password'].encode('utf-8')
-        hashed_pwd = bcrypt.hashpw(password, bcrypt.gensalt()).decode('utf-8')
+        userName = request.form[ 'user' ]
+        password = request.form[ 'password' ].encode( 'utf-8' )
+        hashedPwd = bcrypt.hashpw(
+            password,
+            bcrypt.gensalt()
+        ).decode( 'utf-8' )
 
-        try:
-            cursor.execute('SELECT * FROM users WHERE name = \'{}\''.format(user))
-        except:
-            return render_template('error.html', error='Error in the database!', message='Something went wrong when trying to connect to the database!')
+        response = runQuery( DB_ACTIONS[ 'GET_USER' ], {
+            'userName': userName
+        } )
 
-        account = cursor.fetchone()
+        if( type( response ) is ErrorMessage ):
+            return renderError( response )
+
+        account = response
         if account:
             mesage = 'The user already exists!'
-        elif not user or not password:
+        elif not userName or not password:
             mesage = 'Please complete the form!'
         else:
+            response = runQuery( DB_ACTIONS[ 'ADD_USER' ], {
+                'userName': userName,
+                'hashedPwd': hashedPwd
+            } )
+            
+            if( type( response ) is ErrorMessage ):
+                return renderError( response )
+        
+            mesage = 'Usuer created!'
+            return redirect( url_for( 'login' ) )
 
-            try:
-                cursor.execute('INSERT INTO users VALUES (NULL, \'{}\', \'{}\')'.format(user, hashed_pwd))
-                mysql.connection.commit()
-            except:
-                return render_template('error.html', error='Error in the database!', message='Something went wrong when trying to connect to the database!')
-
-            mesage = 'Usuario creado!'
-            # return redirect(url_for('login'))
     elif request.method == 'POST':
         mesage = 'Please complete the form!'
-    return render_template('signin.html', mesage = mesage)
 
-@app.errorhandler(404)
-def not_found(e):
-    return redirect(url_for('chat'))
+    return render_template( 'signin.html', mesage = mesage )
+
+@app.errorhandler( 404 )
+def not_found( error ):
+    return redirect( url_for( 'chat' ) )
 
 if __name__ == '__main__':
-    app.run(debug=True, port=4000)
+    app.run( debug = True, port = 4000 )
