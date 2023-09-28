@@ -6,7 +6,7 @@ This is a chatbot created using the OpenAI API, Flask and MySQL
 | Dependency | Documentation | MacOS Installation |
 | ------ | ------ | ----- |
 | Venv | https://docs.python.org/3/library/venv.html | https://formulae.brew.sh/formula/virtualenv |
-| Python 3.7 | https://docs.python.org/3.7/ |  |
+| Python 3.7 | https://docs.python.org/3.7/ | https://www.python.org/downloads/release/python-370/ |
 | MySQL | https://dev.mysql.com/doc/ | https://formulae.brew.sh/formula/mysql |
 
 ### Installation
