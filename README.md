@@ -43,7 +43,7 @@ brew install mysql
 ## Setup
 * Create the virtual environment using python 3.7
 ```sh
-python3 -m -venv env
+python -m venv .env
 ```
 ### Start the virtual environment
 * On MacOS (Option 1)
